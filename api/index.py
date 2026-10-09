@@ -1,62 +1,26 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from pathlib import Path
+import json
 import math
 
 app = FastAPI()
 
-# CORS: allow requests from any origin.
-# FastAPI middleware is the only place handling CORS.
+# Enable CORS only through FastAPI middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=False,
-    allow_methods=["POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
-    max_age=600,
 )
 
-# Telemetry records: (region, latency_ms, uptime_pct)
-DATA = [
-    ("apac", 115.35, 98.491),
-    ("apac", 184.66, 99.283),
-    ("apac", 117.78, 99.303),
-    ("apac", 134.42, 98.426),
-    ("apac", 220.38, 98.346),
-    ("apac", 168.04, 98.223),
-    ("apac", 205.86, 98.845),
-    ("apac", 210.74, 98.486),
-    ("apac", 180.56, 97.518),
-    ("apac", 228.40, 97.323),
-    ("apac", 216.04, 98.719),
-    ("apac", 155.29, 97.413),
+# Load your personal telemetry file
+DATA_FILE = Path(__file__).parent / "q-vercel-latency.json"
 
-    ("emea", 181.75, 99.039),
-    ("emea", 181.60, 98.568),
-    ("emea", 126.41, 98.121),
-    ("emea", 218.43, 97.804),
-    ("emea", 217.02, 97.154),
-    ("emea", 218.39, 98.085),
-    ("emea", 153.71, 98.244),
-    ("emea", 133.04, 97.223),
-    ("emea", 201.29, 98.422),
-    ("emea", 124.71, 98.121),
-    ("emea", 123.06, 98.304),
-    ("emea", 179.95, 98.456),
-
-    ("amer", 103.32, 98.359),
-    ("amer", 210.41, 97.356),
-    ("amer", 125.16, 97.813),
-    ("amer", 176.70, 98.981),
-    ("amer", 104.18, 97.369),
-    ("amer", 136.98, 98.682),
-    ("amer", 136.00, 97.107),
-    ("amer", 174.73, 98.664),
-    ("amer", 119.56, 97.813),
-    ("amer", 120.72, 97.881),
-    ("amer", 129.63, 98.793),
-    ("amer", 139.88, 98.568),
-]
+with open(DATA_FILE, encoding="utf-8") as f:
+    telemetry_data = json.load(f)
 
 
 class AnalyticsRequest(BaseModel):
@@ -64,41 +28,53 @@ class AnalyticsRequest(BaseModel):
     threshold_ms: float
 
 
-def percentile95(values: list[float]) -> float:
-    """Calculate the 95th percentile using linear interpolation."""
+def percentile95(values):
     values = sorted(values)
-    position = 0.95 * (len(values) - 1)
+    n = len(values)
 
-    lower = math.floor(position)
-    upper = math.ceil(position)
+    if n == 0:
+        return 0
 
-    if lower == upper:
+    position = (n - 1) * 0.95
+    lower = int(position)
+
+    if lower + 1 >= n:
         return values[lower]
 
-    return (
-        values[lower]
-        + (values[upper] - values[lower]) * (position - lower)
+    fraction = position - lower
+    return values[lower] + fraction * (
+        values[lower + 1] - values[lower]
     )
 
 
-@app.post("/")
-def analytics(request: AnalyticsRequest):
-    results = []
+@app.get("/api")
+def read_root():
+    return {"status": "ok"}
+
+
+@app.post("/api")
+def analyze_latency(request: AnalyticsRequest):
+    results = {}
 
     for region in request.regions:
-        records = [
-            row for row in DATA
-            if row[0] == region
+        rows = [
+            row for row in telemetry_data
+            if row.get("region") == region
         ]
 
-        if not records:
+        if not rows:
+            results[region] = {
+                "avg_latency": 0,
+                "p95_latency": 0,
+                "avg_uptime": 0,
+                "breaches": 0,
+            }
             continue
 
-        latencies = [row[1] for row in records]
-        uptimes = [row[2] for row in records]
+        latencies = [row["latency_ms"] for row in rows]
+        uptimes = [row["uptime_pct"] for row in rows]
 
-        results.append({
-            "region": region,
+        results[region] = {
             "avg_latency": round(
                 sum(latencies) / len(latencies), 2
             ),
@@ -112,6 +88,6 @@ def analytics(request: AnalyticsRequest):
                 latency > request.threshold_ms
                 for latency in latencies
             ),
-        })
+        }
 
-    return {"results": results}
+    return {"regions": results}
