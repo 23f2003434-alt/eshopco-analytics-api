@@ -5,6 +5,18 @@ import math
 
 app = FastAPI()
 
+# CORS: allow requests from any origin.
+# FastAPI middleware is the only place handling CORS.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["POST", "OPTIONS"],
+    allow_headers=["*"],
+    max_age=600,
+)
+
+# Telemetry records: (region, latency_ms, uptime_pct)
 DATA = [
     ("apac", 115.35, 98.491),
     ("apac", 184.66, 99.283),
@@ -18,6 +30,7 @@ DATA = [
     ("apac", 228.40, 97.323),
     ("apac", 216.04, 98.719),
     ("apac", 155.29, 97.413),
+
     ("emea", 181.75, 99.039),
     ("emea", 181.60, 98.568),
     ("emea", 126.41, 98.121),
@@ -30,6 +43,7 @@ DATA = [
     ("emea", 124.71, 98.121),
     ("emea", 123.06, 98.304),
     ("emea", 179.95, 98.456),
+
     ("amer", 103.32, 98.359),
     ("amer", 210.41, 97.356),
     ("amer", 125.16, 97.813),
@@ -50,38 +64,21 @@ class AnalyticsRequest(BaseModel):
     threshold_ms: float
 
 
-@app.middleware("http")
-async def add_cors_headers(request: Request, call_next):
-    if request.method == "OPTIONS":
-        response = Response(status_code=204)
-    else:
-        response = await call_next(request)
-
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
-
-    requested_headers = request.headers.get(
-        "access-control-request-headers"
-    )
-    response.headers["Access-Control-Allow-Headers"] = (
-        requested_headers or "Content-Type"
-    )
-    response.headers["Access-Control-Max-Age"] = "600"
-    return response
-
-
-def percentile95(values):
+def percentile95(values: list[float]) -> float:
+    """Calculate the 95th percentile using linear interpolation."""
     values = sorted(values)
     position = 0.95 * (len(values) - 1)
+
     lower = math.floor(position)
     upper = math.ceil(position)
 
     if lower == upper:
         return values[lower]
 
-    return values[lower] + (
-        values[upper] - values[lower]
-    ) * (position - lower)
+    return (
+        values[lower]
+        + (values[upper] - values[lower]) * (position - lower)
+    )
 
 
 @app.post("/")
@@ -89,7 +86,10 @@ def analytics(request: AnalyticsRequest):
     results = []
 
     for region in request.regions:
-        records = [row for row in DATA if row[0] == region]
+        records = [
+            row for row in DATA
+            if row[0] == region
+        ]
 
         if not records:
             continue
@@ -102,7 +102,9 @@ def analytics(request: AnalyticsRequest):
             "avg_latency": round(
                 sum(latencies) / len(latencies), 2
             ),
-            "p95_latency": round(percentile95(latencies), 2),
+            "p95_latency": round(
+                percentile95(latencies), 2
+            ),
             "avg_uptime": round(
                 sum(uptimes) / len(uptimes), 3
             ),
